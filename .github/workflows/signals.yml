@@ -1,10 +1,8 @@
 name: XAUUSD Swing Signals
 
 on:
-  schedule:
-    # ~every 15 min, offset off the hour to dodge GitHub's busy-time delays.
-    # (GitHub cron is best-effort; expect a few minutes' slack -- fine for swing.)
-    - cron: '3,18,33,48 * * * *'
+  # Triggered externally by cron-job.org (punctual) via the workflow_dispatch
+  # REST endpoint. The "test" toggle is also usable from the Actions UI button.
   workflow_dispatch:
     inputs:
       test:
