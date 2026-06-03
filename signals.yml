@@ -1,0 +1,44 @@
+name: XAUUSD Swing Signals
+
+on:
+  schedule:
+    # ~every 15 min, offset off the hour to dodge GitHub's busy-time delays.
+    # (GitHub cron is best-effort; expect a few minutes' slack -- fine for swing.)
+    - cron: '3,18,33,48 * * * *'
+  workflow_dispatch: {}   # adds a "Run workflow" button so you can test manually
+
+permissions:
+  contents: write          # required so the run can commit the state file back
+
+jobs:
+  signal:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run signal check
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          TD_KEY: ${{ secrets.TD_KEY }}
+        run: python xauusd_discord_signals.py
+
+      - name: Persist signal state (de-dupe / cooldown memory)
+        run: |
+          if [[ -n "$(git status --porcelain xau_signal_state.json)" ]]; then
+            git config user.name  "github-actions"
+            git config user.email "actions@github.com"
+            git add xau_signal_state.json
+            git commit -m "update signal state [skip ci]"
+            git push
+          else
+            echo "No state change."
+          fi
