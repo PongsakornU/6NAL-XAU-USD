@@ -220,10 +220,44 @@ def send_discord(sig: dict):
         raise RuntimeError(f"Discord error {r.status_code}: {r.text}")
 
 
+def send_test_snapshot(df: pd.DataFrame):
+    """TEST_MODE: post the current reading regardless of conditions, so you can
+    confirm the deployed bot can reach Discord. Does NOT touch signal state."""
+    c = df.iloc[-2]
+    embed = {
+        "title": f"🧪 TEST — XAUUSD reading ({INTERVAL})",
+        "color": 10070709,  # neutral grey/purple
+        "fields": [
+            {"name": "Price",  "value": f"${c['close']:,.2f}", "inline": True},
+            {"name": "RSI",    "value": f"{c['rsi']:.1f}",      "inline": True},
+            {"name": "ATR",    "value": f"{c['atr']:.2f}",      "inline": True},
+            {"name": "EMA20",  "value": f"{c['ema_fast']:,.2f}", "inline": True},
+            {"name": "EMA50",  "value": f"{c['ema_mid']:,.2f}",  "inline": True},
+            {"name": "EMA200", "value": f"{c['ema_slow']:,.2f}", "inline": True},
+        ],
+        "footer": {"text": "Test ping — not a live signal. Turn TEST_MODE off "
+                           "for normal operation."},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    payload = {"username": "XAU Signals", "embeds": [embed]}
+    headers = {"User-Agent": "XAU-Signals/1.0 (gold signal bot)"}
+    r = requests.post(WEBHOOK_URL, json=payload, headers=headers, timeout=20)
+    if r.status_code not in (200, 204):
+        raise RuntimeError(f"Discord error {r.status_code}: {r.text}")
+
+
 # --------------------- MAIN ---------------------
 def main():
-    state = load_state()
     df = add_indicators(fetch_candles())
+
+    # One-time end-to-end check: set TEST_MODE=1 (or the workflow toggle) to push
+    # the current reading to Discord without waiting for a real setup.
+    if os.environ.get("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        send_test_snapshot(df)
+        print("Test snapshot sent to Discord.")
+        return
+
+    state = load_state()
     sig = evaluate(df)
 
     if sig is None:
