@@ -38,6 +38,7 @@ before risking real money. Gold is volatile; size positions you can afford.
 
 import os
 import json
+import math
 import sys
 from datetime import datetime, timezone
 
@@ -57,20 +58,38 @@ SYMBOL = "XAU/USD"
 INTERVAL = "4h"
 CANDLES_TO_FETCH = 320          # enough history for EMA200 + indicators
 
-# --- Indicator params ---
+# --- Strategy: ema_cross + donchian_break (validated on 19yr of gold) ---
+# Fires when EITHER an EMA20/50 cross (trend-filtered) OR an N-bar breakout
+# happens, in the EMA200 trend direction. ~1 signal/week on 4h, ~1 every
+# 7 weeks on daily. NOTE: donchian leans on trends -- expect rough patches
+# in flat/falling gold. The 4h sample is bull-only, so treat 4h as optimistic.
 EMA_FAST, EMA_MID, EMA_SLOW = 20, 50, 200
-RSI_PERIOD = 14
-RSI_LONG_ZONE = (40, 55)        # uptrend: buy a pullback into this RSI band
-RSI_SHORT_ZONE = (45, 60)       # downtrend: sell a bounce into this band
-MACD_FAST, MACD_SLOW, MACD_SIGNAL = 12, 26, 9
+DONCHIAN_N = 20                 # breakout lookback (bars)
+RSI_PERIOD = 14                 # kept for the info readout only (not a filter)
 ATR_PERIOD = 14
 
 # --- Risk plan (attached to every signal) ---
-SL_ATR_MULT = 1.5               # stop = 1.5 * ATR from entry
+SL_ATR_MULT = 2.0               # stop = 2.0 * ATR from entry (matches backtest)
 RR_RATIO = 2.0                  # take-profit = 2x the risk (1:2)
 
+# --- Account / broker (for position sizing) -------------------
+# Set these to YOUR account. Dollar figures are the source of truth;
+# pips are just a convenience and depend on your broker's convention.
+ACCOUNT_BALANCE = 1000.0        # your account size (assumed USD)
+RISK_PCT = 1.0                  # % of balance to risk per trade (1-2% is common)
+CONTRACT_SIZE = 100             # oz per 1.00 lot of XAUUSD (standard)
+LOT_STEP = 0.01                 # smallest lot increment your broker allows
+MIN_LOT = 0.01                  # broker minimum lot
+PIP_SIZE = 0.10                 # price move counted as "1 pip" (gold: often 0.10)
+LEVERAGE = 100                  # your account leverage (for margin estimate only)
+TYPICAL_SPREAD = 0.30           # broker spread in price terms ($/oz), for info
+# --------------------------------------------------------------
+
 # --- Anti-spam ---
-COOLDOWN_BARS = 4               # min closed candles between signals
+# Min CLOSED candles between alerts. On 4h, 18 candles = 3 days, which yields
+# ~1 signal/week (matches the backtest's tradeable cadence and stops the bot
+# re-alerting every bar during a long breakout). On daily, use ~3.
+COOLDOWN_BARS = 18
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "xau_signal_state.json")
 # ==============================================================
@@ -128,54 +147,59 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["ema_mid"] = ema(df["close"], EMA_MID)
     df["ema_slow"] = ema(df["close"], EMA_SLOW)
     df["rsi"] = rsi(df["close"], RSI_PERIOD)
-    macd_line = ema(df["close"], MACD_FAST) - ema(df["close"], MACD_SLOW)
-    df["macd"] = macd_line
-    df["macd_signal"] = ema(macd_line, MACD_SIGNAL)
     df["atr"] = atr(df, ATR_PERIOD)
+    # Donchian channel: highest high / lowest low of the PRIOR N bars
+    df["don_high"] = df["high"].rolling(DONCHIAN_N).max().shift(1)
+    df["don_low"] = df["low"].rolling(DONCHIAN_N).min().shift(1)
     return df
 
 
 # --------------------- SIGNAL LOGIC ---------------------
 def evaluate(df: pd.DataFrame):
-    """Use the LAST CLOSED candle (index -2; -1 may still be forming)."""
+    """Combined ema_cross + donchian_break on the LAST CLOSED candle
+    (index -2; -1 may still be forming). EMA cross takes priority; if it
+    doesn't fire, check the breakout. Both require EMA200 trend agreement."""
     c = df.iloc[-2]
     p = df.iloc[-3]
 
-    macd_cross_up = (p["macd"] <= p["macd_signal"]) and (c["macd"] > c["macd_signal"])
-    macd_cross_dn = (p["macd"] >= p["macd_signal"]) and (c["macd"] < c["macd_signal"])
+    direction = model = None
 
-    long_ok = (
-        c["close"] > c["ema_slow"] and
-        c["ema_fast"] > c["ema_mid"] > c["ema_slow"] and
-        RSI_LONG_ZONE[0] <= c["rsi"] <= RSI_LONG_ZONE[1] and
-        macd_cross_up
-    )
-    short_ok = (
-        c["close"] < c["ema_slow"] and
-        c["ema_fast"] < c["ema_mid"] < c["ema_slow"] and
-        RSI_SHORT_ZONE[0] <= c["rsi"] <= RSI_SHORT_ZONE[1] and
-        macd_cross_dn
-    )
+    # 1) EMA20/50 cross, in the EMA200 trend direction
+    cross_up = p["ema_fast"] <= p["ema_mid"] and c["ema_fast"] > c["ema_mid"]
+    cross_dn = p["ema_fast"] >= p["ema_mid"] and c["ema_fast"] < c["ema_mid"]
+    if cross_up and c["close"] > c["ema_slow"]:
+        direction, model = "LONG", "ema_cross"
+    elif cross_dn and c["close"] < c["ema_slow"]:
+        direction, model = "SHORT", "ema_cross"
+    # 2) Donchian breakout, fired ONLY on the candle that crosses the channel
+    #    (prior candle was still inside it) so it doesn't repeat every bar.
+    elif (not pd.isna(c["don_high"]) and c["close"] > c["don_high"]
+          and p["close"] <= p["don_high"] and c["close"] > c["ema_slow"]):
+        direction, model = "LONG", "donchian_break"
+    elif (not pd.isna(c["don_low"]) and c["close"] < c["don_low"]
+          and p["close"] >= p["don_low"] and c["close"] < c["ema_slow"]):
+        direction, model = "SHORT", "donchian_break"
 
-    if long_ok or short_ok:
-        direction = "LONG" if long_ok else "SHORT"
-        entry = c["close"]
-        risk = SL_ATR_MULT * c["atr"]
-        if direction == "LONG":
-            sl, tp = entry - risk, entry + risk * RR_RATIO
-        else:
-            sl, tp = entry + risk, entry - risk * RR_RATIO
-        return {
-            "direction": direction,
-            "candle_time": str(c["datetime"]),
-            "entry": round(entry, 2),
-            "sl": round(sl, 2),
-            "tp": round(tp, 2),
-            "rr": RR_RATIO,
-            "rsi": round(c["rsi"], 1),
-            "atr": round(c["atr"], 2),
-        }
-    return None
+    if direction is None:
+        return None
+
+    entry = c["close"]
+    risk = SL_ATR_MULT * c["atr"]
+    if direction == "LONG":
+        sl, tp = entry - risk, entry + risk * RR_RATIO
+    else:
+        sl, tp = entry + risk, entry - risk * RR_RATIO
+    return {
+        "direction": direction,
+        "model": model,
+        "candle_time": str(c["datetime"]),
+        "entry": round(entry, 2),
+        "sl": round(sl, 2),
+        "tp": round(tp, 2),
+        "rr": RR_RATIO,
+        "rsi": round(c["rsi"], 1),
+        "atr": round(c["atr"], 2),
+    }
 
 
 # --------------------- STATE ---------------------
@@ -184,7 +208,7 @@ def load_state():
         with open(STATE_FILE) as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"last_candle": None, "bars_since": COOLDOWN_BARS}
+        return {"last_candle": None}
 
 
 def save_state(state):
@@ -192,23 +216,69 @@ def save_state(state):
         json.dump(state, f)
 
 
+# --------------------- POSITION SIZING ---------------------
+def position_plan(entry: float, sl: float, tp: float) -> dict:
+    """Risk-based lot sizing. Risk a fixed % of the account; lot size falls out
+    of the stop distance. Leverage only affects the margin estimate, not P&L."""
+    stop_dist = abs(entry - sl)            # price distance to stop ($/oz)
+    reward_dist = abs(tp - entry)          # price distance to target ($/oz)
+    risk_amount = ACCOUNT_BALANCE * RISK_PCT / 100.0
+
+    risk_per_lot = stop_dist * CONTRACT_SIZE          # $ lost per 1.00 lot if SL hit
+    raw_lots = risk_amount / risk_per_lot if risk_per_lot else 0
+    # round DOWN to the broker lot step so we never risk more than intended
+    lots = math.floor(raw_lots / LOT_STEP) * LOT_STEP
+    lots = round(max(lots, 0), 2)
+
+    too_small = lots < MIN_LOT             # account too small for this stop at this risk
+
+    est_risk = lots * risk_per_lot
+    est_reward = lots * reward_dist * CONTRACT_SIZE
+    notional = lots * CONTRACT_SIZE * entry
+    margin = notional / LEVERAGE if LEVERAGE else 0
+
+    return {
+        "lots": lots,
+        "too_small": too_small,
+        "stop_pips": stop_dist / PIP_SIZE,
+        "tp_pips": reward_dist / PIP_SIZE,
+        "risk_usd": est_risk,
+        "reward_usd": est_reward,
+        "margin_usd": margin,
+    }
+
+
 # --------------------- DISCORD ---------------------
 def send_discord(sig: dict):
     is_long = sig["direction"] == "LONG"
+    p = position_plan(sig["entry"], sig["sl"], sig["tp"])
+
+    if p["too_small"]:
+        lot_text = (f"⚠ {MIN_LOT} (min) — stop is too wide to keep risk at "
+                    f"{RISK_PCT}% of ${ACCOUNT_BALANCE:,.0f}. Risk would exceed target.")
+    else:
+        lot_text = f"{p['lots']:.2f} lot  (risk {RISK_PCT}% = ${p['risk_usd']:,.2f})"
+
     embed = {
-        "title": f"{'🟢 BUY' if is_long else '🔴 SELL'}  XAUUSD  ({INTERVAL} swing)",
+        "title": f"{'🟢 BUY' if is_long else '🔴 SELL'}  XAUUSD  ({INTERVAL})  ·  {sig.get('model','')}",
         "color": 3066993 if is_long else 15158332,   # green / red
         "fields": [
             {"name": "Entry",  "value": str(sig["entry"]), "inline": True},
-            {"name": "Stop",   "value": str(sig["sl"]),    "inline": True},
-            {"name": f"Target (1:{sig['rr']:g})",
+            {"name": f"Stop ({p['stop_pips']:.0f} pips)",
+             "value": str(sig["sl"]), "inline": True},
+            {"name": f"Target ({p['tp_pips']:.0f} pips, 1:{sig['rr']:g})",
              "value": str(sig["tp"]), "inline": True},
+            {"name": "Suggested size", "value": lot_text, "inline": False},
+            {"name": "Risk",    "value": f"${p['risk_usd']:,.2f}", "inline": True},
+            {"name": "Reward",  "value": f"${p['reward_usd']:,.2f}", "inline": True},
+            {"name": "Margin",  "value": f"~${p['margin_usd']:,.2f} @ 1:{LEVERAGE}",
+             "inline": True},
             {"name": "RSI",    "value": str(sig["rsi"]),   "inline": True},
             {"name": "ATR",    "value": str(sig["atr"]),   "inline": True},
             {"name": "Candle", "value": sig["candle_time"], "inline": False},
         ],
-        "footer": {"text": "Confluence: trend + EMA stack + pullback + MACD cross. "
-                           "Not financial advice."},
+        "footer": {"text": f"Mid price — real fill differs by ~spread (${TYPICAL_SPREAD}). "
+                           "Set SL/TP on your broker. Not financial advice."},
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     payload = {"username": "XAU Signals", "embeds": [embed]}
@@ -261,24 +331,29 @@ def main():
     sig = evaluate(df)
 
     if sig is None:
-        state["bars_since"] = state.get("bars_since", 0) + 1
-        save_state(state)
         print(f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M}Z] No signal.")
         return
 
-    if sig["candle_time"] == state.get("last_candle"):
+    last = state.get("last_candle")
+
+    # de-dupe: never alert the same candle twice
+    if sig["candle_time"] == last:
         print("Already alerted this candle. Skipping.")
         return
 
-    if state.get("bars_since", COOLDOWN_BARS) < COOLDOWN_BARS:
-        print(f"In cooldown ({state['bars_since']}/{COOLDOWN_BARS} bars). Skipping.")
-        state["bars_since"] += 1
-        save_state(state)
-        return
+    # cooldown measured in CLOSED CANDLES (not runs): find both candles in the
+    # fetched data and require at least COOLDOWN_BARS between them.
+    if last is not None:
+        times = df["datetime"].astype(str).tolist()
+        if last in times and sig["candle_time"] in times:
+            gap = times.index(sig["candle_time"]) - times.index(last)
+            if gap < COOLDOWN_BARS:
+                print(f"In cooldown ({gap}/{COOLDOWN_BARS} candles). Skipping.")
+                return
 
     send_discord(sig)
-    print(f"Signal sent: {sig['direction']} @ {sig['entry']}")
-    save_state({"last_candle": sig["candle_time"], "bars_since": 0})
+    print(f"Signal sent: {sig['direction']} ({sig['model']}) @ {sig['entry']}")
+    save_state({"last_candle": sig["candle_time"]})
 
 
 if __name__ == "__main__":
