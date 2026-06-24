@@ -35,12 +35,23 @@ jobs:
           TEST_MODE: ${{ inputs.test }}
         run: python xauusd_discord_signals.py
 
-      - name: Persist signal state (de-dupe / cooldown memory)
+      - name: Run trade tracker
+        # Runs right after the signal check in the same job (zero delay, same
+        # market data). Picks up any fresh trade and pings the tracking channel.
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          TRACKER_WEBHOOK: ${{ secrets.TRACKER_WEBHOOK }}
+          TD_KEY: ${{ secrets.TD_KEY }}
+          TEST_MODE: ${{ inputs.test }}
+        run: python xauusd_trade_tracker.py
+
+      - name: Persist state (signal de-dupe + trade tracking memory)
+        if: always()   # still save signal state even if the tracker step errors
         run: |
-          if [[ -n "$(git status --porcelain xau_signal_state.json)" ]]; then
+          if [[ -n "$(git status --porcelain xau_signal_state.json xau_trade_tracker.json)" ]]; then
             git config user.name  "github-actions"
             git config user.email "actions@github.com"
-            git add xau_signal_state.json
+            git add xau_signal_state.json xau_trade_tracker.json
             git commit -m "update signal state [skip ci]"
             git push
           else
