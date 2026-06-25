@@ -1,1 +1,1 @@
-{"open": {"direction": "SHORT", "model": "donchian_break", "entry": 3992.99, "sl": 4062.37, "tp": 3854.23, "risk": 69.38000000000011, "opened_candle": "2026-06-24 19:00:00", "bars_open": 2, "hit_milestone": false}, "last_signal_candle": "2026-06-24 19:00:00", "alerts_sent": []}
+{"open": {"direction": "SHORT", "model": "donchian_break", "entry": 3992.99, "sl": 4062.37, "tp": 3854.23, "risk": 69.38000000000011, "opened_candle": "2026-06-24 19:00:00", "bars_open": 3, "hit_milestone": false}, "last_signal_candle": "2026-06-24 19:00:00", "alerts_sent": []}
