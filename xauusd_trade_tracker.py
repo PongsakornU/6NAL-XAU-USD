@@ -126,8 +126,12 @@ def main():
 
     t = load_track()
 
-    # --- 1) pick up a NEW trade from a fresh signal ---
-    sig = strat.evaluate(df)
+    # --- 1) pick up a NEW trade from the signal the bot ACTUALLY announced ---
+    # Read it from the signal bot's state file (written this same run, by the
+    # step just before this one) instead of re-evaluating. This keeps the tracker
+    # in lockstep with what was sent to you: it will NOT pick up signals the bot
+    # suppressed via cooldown/de-dupe, nor anything during a TEST_MODE run.
+    sig = strat.load_state().get("last_signal")
     if sig and sig["candle_time"] != t.get("last_signal_candle") and t["open"] is None:
         t["open"] = {
             "direction": sig["direction"], "model": sig["model"],

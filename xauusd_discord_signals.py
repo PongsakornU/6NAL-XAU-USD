@@ -353,7 +353,11 @@ def main():
 
     send_discord(sig)
     print(f"Signal sent: {sig['direction']} ({sig['model']}) @ {sig['entry']}")
-    save_state({"last_candle": sig["candle_time"]})
+    # Save the FULL announced signal (not just the candle time) so the trade
+    # tracker picks up exactly this trade. The tracker reads last_signal instead
+    # of re-evaluating, which keeps it in lockstep with what was actually sent
+    # (no cooldown/de-dupe/test-mode desync).
+    save_state({"last_candle": sig["candle_time"], "last_signal": sig})
 
 
 if __name__ == "__main__":
