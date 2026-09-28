@@ -1,1 +1,1 @@
-{"open": {"direction": "SHORT", "model": "donchian_break", "entry": 4230.06, "sl": 4260.63, "tp": 4168.93, "risk": 30.56999999999971, "opened_candle": "2026-09-28 07:00:00", "bars_open": 1, "hit_milestone": true}, "last_signal_candle": "2026-09-28 07:00:00", "alerts_sent": ["breakeven"], "last_trail": 4230.73}
+{"open": null, "last_signal_candle": "2026-09-28 07:00:00", "alerts_sent": ["breakeven"], "last_trail": 4230.73}
