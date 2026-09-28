@@ -1,1 +1,1 @@
-{"last_candle": "2026-09-22 19:00:00", "last_signal": {"direction": "SHORT", "model": "ema_cross", "candle_time": "2026-09-22 19:00:00", "entry": 4336.88, "sl": 4386.24, "tp": 4238.14, "rr": 2.0, "rsi": 42.4, "atr": 24.68}}
+{"last_candle": "2026-09-28 07:00:00", "last_signal": {"direction": "SHORT", "model": "donchian_break", "candle_time": "2026-09-28 07:00:00", "entry": 4230.06, "sl": 4260.63, "tp": 4168.93, "rr": 2.0, "rsi": 22.5, "atr": 15.28}}
