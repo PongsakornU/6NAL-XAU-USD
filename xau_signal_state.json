@@ -1,1 +1,1 @@
-{"last_candle": "2026-11-16 15:00:00", "last_signal": {"direction": "SHORT", "model": "donchian_break", "candle_time": "2026-11-16 15:00:00", "entry": 3857.34, "sl": 3893.84, "tp": 3784.32, "rr": 2.0, "rsi": 31.9, "atr": 18.25}}
+{"last_candle": "2026-11-19 23:00:00", "last_signal": {"direction": "SHORT", "model": "donchian_break", "candle_time": "2026-11-19 23:00:00", "entry": 3674.73, "sl": 3738.07, "tp": 3548.05, "rr": 2.0, "rsi": 20.7, "atr": 31.67}}
